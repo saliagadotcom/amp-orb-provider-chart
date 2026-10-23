@@ -1,9 +1,11 @@
-{{- if eq .Values.cloud "aks" }}
+{{- if and .Values.substrate.enabled (eq .Values.cloud "aks") }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
+{{- if not .Values.snapshots.s3.endpoint }}
   annotations:
     azure.workload.identity/client-id: {{ .Values.snapshots.aks.clientId }}
+{{- end }}
   name: ate-api-server
   namespace: ate-system
 ---
@@ -33,8 +35,10 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
+{{- if not .Values.snapshots.s3.endpoint }}
   annotations:
     azure.workload.identity/client-id: {{ .Values.snapshots.aks.clientId }}
+{{- end }}
   name: atelet
   namespace: ate-system
 ---
@@ -1910,6 +1914,7 @@ metadata:
   name: atenet-router-envoy-config
   namespace: ate-system
 ---
+{{- if .Values.postgres.enabled }}
 apiVersion: v1
 data:
   pg_hba.conf: |
@@ -1969,7 +1974,9 @@ kind: ConfigMap
 metadata:
   name: postgres-config
   namespace: ate-system
+{{- end }}
 ---
+{{- if .Values.postgres.enabled }}
 apiVersion: v1
 data:
   setup.sql: |
@@ -2059,6 +2066,7 @@ kind: ConfigMap
 metadata:
   name: postgres-setup-h7k5m47g66
   namespace: ate-system
+{{- end }}
 ---
 apiVersion: v1
 data:
@@ -2287,6 +2295,7 @@ spec:
   selector:
     app: ate-idp-server
 ---
+{{- if .Values.postgres.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -2300,6 +2309,7 @@ spec:
     targetPort: 5432
   selector:
     app: postgres
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -2386,7 +2396,9 @@ spec:
         prometheus.io/scrape: "true"
       labels:
         app: ate-api-server
+{{- if not .Values.snapshots.s3.endpoint }}
         azure.workload.identity/use: "true"
+{{- end }}
     spec:
       containers:
       - args:
@@ -2465,9 +2477,11 @@ spec:
           name: servicedns
         - mountPath: /run/podidentity.podcert.ate.dev
           name: podidentity
+{{- if .Values.postgres.enabled }}
         - mountPath: /run/postgres.podcert.ate.dev
           name: postgres
           readOnly: true
+{{- end }}
         - mountPath: /run/actor-id-jwt-pool
           name: actor-id-jwt-pool
         - mountPath: /run/actor-id-ca-pool
@@ -2486,8 +2500,10 @@ spec:
       - args:
         - --cert=servicedns.podcert.ate.dev/identity=/out/servicedns
         - --cert=podidentity.podcert.ate.dev/identity=/out/podidentity
+{{- if .Values.postgres.enabled }}
         - --cert=postgres.podcert.ate.dev/identity=/out/postgres,file=substrate_owner_user.pem,trust=false,annotation=postgres.podcert.ate.dev/username=substrate_owner_user
         - --cert=postgres.podcert.ate.dev/identity=/out/postgres,file=substrate_readwrite_user.pem,trust=false,annotation=postgres.podcert.ate.dev/username=substrate_readwrite_user
+{{- end }}
         image: {{ include "orb-provider.image" (list $ .Values.images.substrate.podcertAgent) }}
         name: podcert-agent
         resources:
@@ -2508,8 +2524,10 @@ spec:
             - --check
             - --cert=servicedns.podcert.ate.dev/identity=/out/servicedns
             - --cert=podidentity.podcert.ate.dev/identity=/out/podidentity
+{{- if .Values.postgres.enabled }}
             - --cert=postgres.podcert.ate.dev/identity=/out/postgres,file=substrate_owner_user.pem,trust=false,annotation=postgres.podcert.ate.dev/username=substrate_owner_user
             - --cert=postgres.podcert.ate.dev/identity=/out/postgres,file=substrate_readwrite_user.pem,trust=false,annotation=postgres.podcert.ate.dev/username=substrate_readwrite_user
+{{- end }}
           failureThreshold: 300
           periodSeconds: 1
         volumeMounts:
@@ -2523,12 +2541,17 @@ spec:
           name: servicedns
         - mountPath: /out/podidentity
           name: podidentity
+{{- if .Values.postgres.enabled }}
         - mountPath: /out/postgres
           name: postgres
+{{- end }}
       - args:
         - control
         - --socket=/run/objectstore-plugin/control.sock
         env:
+{{- if .Values.snapshots.s3.endpoint }}
+{{ include "orb-provider.s3Env" . | indent 8 }}
+{{- else }}
         - name: ATE_STORAGE_BACKEND
           value: azblob
         - name: AZURE_STORAGE_ACCOUNT
@@ -2536,9 +2559,14 @@ spec:
             configMapKeyRef:
               key: storageAccount
               name: ate-azure-config
+{{- end }}
         envFrom:
         - configMapRef:
             name: ate-otel-config
+{{- if .Values.snapshots.s3.endpoint }}
+        - secretRef:
+            name: {{ .Values.snapshots.s3.existingSecret | quote }}
+{{- end }}
         image: {{ include "orb-provider.image" (list $ .Values.images.substrate.objectstorePlugin) }}
         name: objectstore-plugin
         restartPolicy: Always
@@ -2576,9 +2604,11 @@ spec:
       - emptyDir:
           medium: Memory
         name: podidentity
+{{- if .Values.postgres.enabled }}
       - emptyDir:
           medium: Memory
         name: postgres
+{{- end }}
       - emptyDir: {}
         name: objectstore-plugin
       - name: actor-id-jwt-pool
@@ -2605,8 +2635,15 @@ spec:
         name: authentication-config
       - name: postgres-server-ca
         secret:
+{{- if .Values.postgres.enabled }}
           optional: true
           secretName: postgres-server-ca
+{{- else }}
+          secretName: {{ required "postgres.external.caSecret is required when postgres.enabled=false" .Values.postgres.external.caSecret | quote }}
+          items:
+          - key: {{ .Values.postgres.external.caKey | default "ca.crt" | quote }}
+            path: server-ca.pem
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -3439,6 +3476,7 @@ spec:
                 path: postgres-pool.json
               name: postgres-ca-pool
 ---
+{{- if .Values.postgres.enabled }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -3636,6 +3674,7 @@ spec:
       resources:
         requests:
           storage: 500Gi
+{{- end }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -3721,7 +3760,9 @@ spec:
         prometheus.io/scrape: "true"
       labels:
         app: atelet
+{{- if not .Values.snapshots.s3.endpoint }}
         azure.workload.identity/use: "true"
+{{- end }}
     spec:
       containers:
       - args:
@@ -3734,6 +3775,7 @@ spec:
         - --drain-timeout=5m
         - --objectstore-plugin-socket=/run/objectstore-plugin/node.sock
         - --snapshot-upload-delay=5s
+{{ include "orb-provider.imageCacheArgs" . | indent 8 }}
         - --egress-mitm-trust-source=configmap
         env:
         - name: NODE_NAME
@@ -3866,6 +3908,9 @@ spec:
         - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging
         - --asset-staging-capacity=8Gi
         env:
+{{- if .Values.snapshots.s3.endpoint }}
+{{ include "orb-provider.s3Env" . | indent 8 }}
+{{- else }}
         - name: ATE_STORAGE_BACKEND
           value: azblob
         - name: AZURE_STORAGE_ACCOUNT
@@ -3873,9 +3918,14 @@ spec:
             configMapKeyRef:
               key: storageAccount
               name: ate-azure-config
+{{- end }}
         envFrom:
         - configMapRef:
             name: ate-otel-config
+{{- if .Values.snapshots.s3.endpoint }}
+        - secretRef:
+            name: {{ .Values.snapshots.s3.existingSecret | quote }}
+{{- end }}
         image: {{ include "orb-provider.image" (list $ .Values.images.substrate.objectstorePlugin) }}
         name: objectstore-plugin
         resources:
@@ -4123,6 +4173,7 @@ spec:
   policyTypes:
   - Ingress
 ---
+{{- if .Values.postgres.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -4142,4 +4193,5 @@ spec:
       app: postgres
   policyTypes:
   - Ingress
+{{- end }}
 {{- end }}

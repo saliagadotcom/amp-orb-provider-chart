@@ -1,0 +1,14 @@
+# Runtime namespaces only. Privileged admission permits the runtime's hostPath/capabilities.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: amp-orbs
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-system
+  labels:
+    pod-security.kubernetes.io/enforce: privileged

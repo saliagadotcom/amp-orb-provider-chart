@@ -1,5 +1,29 @@
-# gke, eks or aks.
+# gke, eks, aks, or onprem (for example, Talos).
 cloud: gke
+
+# Keep the bundled runtime by default. External runtimes must be compatible and
+# run in this cluster; authorize the provider's ServiceAccount in their router.
+substrate:
+  enabled: true
+  external:
+    apiAddress: api.ate-system.svc:443
+    routerAddress: atenet-router.ate-system.svc:443
+    audience: api.ate-system.svc
+    pkiDelivery: agent
+    trustBundleConfigMap: podcert-trust-bundles
+  authentication:
+    # Fetch Kubernetes signing keys in-cluster; keep the discovered issuer.
+    inClusterJWKS: false
+
+# External connection Secret keys:
+# ATE_API_POSTGRES_OWNER_CONNECTION_STRING, ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING,
+# ATE_API_POSTGRES_OWNER_ROLE, ATE_API_POSTGRES_READ_WRITE_ROLE, ATE_API_POSTGRES_SCHEMA.
+postgres:
+  enabled: true
+  external:
+    existingSecret: ''
+    caSecret: ''
+    caKey: ca.crt
 
 # How the provider reaches Amp. Nothing connects in: `amp orb provider`, in the provider Pod,
 # claims sandbox jobs from Amp over outbound HTTPS and runs them against the provider next to
@@ -47,6 +71,12 @@ provider:
 # snapshots.aks.storageAccount (gs://<container>/<prefix>).
 snapshots:
   location: ''
+  # Optional S3-compatible backend. Credentials stay in an existing runtime Secret.
+  s3:
+    endpoint: ''
+    region: ''
+    forcePathStyle: true
+    existingSecret: ''
   # EKS only. Required.
   eks:
     # Region of the cluster and the bucket.
@@ -83,6 +113,8 @@ upgrade:
 # Substrate's atelet pulls the sandbox image, the orbd image volume and the pause image itself, not
 # through kubelet, so the cluster's imagePullSecrets do not apply to them.
 atelet:
+  # Optional maxBytes, highPercent, lowPercent, gcPeriod. Unset keeps upstream defaults.
+  imageCache: {}
   registry:
     # Name of a kubernetes.io/dockerconfigjson Secret in the ate-system namespace that atelet uses
     # as its Docker config for those pulls, for images in a private registry (Artifactory, a

@@ -1,3 +1,4 @@
+{{- if .Values.substrate.enabled }}
 # Pre-upgrade hook: before a release that changes Substrate rolls atelet and the API server,
 # suspend every sandbox on a worker (src/upgrade.ts, protocol.md "Chart Upgrades"). Otherwise
 # those sandboxes end CRASHED. Best effort: the Job always succeeds. Runs only when
@@ -105,4 +106,6 @@ spec:
       volumes:
         - name: substrate
           {{- include "orb-provider.substrateVolume" . | nindent 10 }}
+{{- end }}
+
 {{- end }}

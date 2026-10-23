@@ -1,6 +1,6 @@
 apiVersion: v2
 appVersion: bfdfc50-7ace5f7
-description: Amp orb provider on Substrate, for a customer's own Kubernetes cluster
+description: Amp orb provider on Substrate, with optional on-premises configuration
 name: chart
 type: application
-version: 0.20261021.1930
+version: 0.20261021.1930-onprem.1

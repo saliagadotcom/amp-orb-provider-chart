@@ -1,3 +1,4 @@
+{{- if and .Values.substrate.enabled (not .Values.snapshots.s3.endpoint) }}
 {{/* Region of the S3 snapshot bucket; atelet reads it as AWS_REGION. */}}
 {{- if eq .Values.cloud "eks" }}
 apiVersion: v1
@@ -17,4 +18,6 @@ metadata:
   namespace: ate-system
 data:
   storageAccount: {{ .Values.snapshots.aks.storageAccount }}
+{{- end }}
+
 {{- end }}

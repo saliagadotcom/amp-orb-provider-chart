@@ -1,3 +1,4 @@
+{{- if .Values.substrate.enabled }}
 # Before anything else is applied, `ate-setup bootstrap` creates what the Substrate manifests
 # cannot carry: the Substrate namespaces (ate-system, otel-system, podcertificate-controller-system;
 # the release kustomizations strip them from the manifests because Helm would try to create them
@@ -103,7 +104,11 @@ spec:
         - name: admission-policies
           configMap:
             name: substrate-admission-policies
+      {{- if .Values.substrate.authentication.inClusterJWKS }}
+      initContainers:
+      {{- else }}
       containers:
+      {{- end }}
         - name: bootstrap
           image: {{ include "orb-provider.image" (list $ .Values.images.substrate.ateSetup) }}
           volumeMounts:
@@ -113,9 +118,36 @@ spec:
             - name: admission-policies
               mountPath: /admission-policies
               readOnly: true
+          {{- if not .Values.postgres.enabled }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.postgres.external.existingSecret | quote }}
+          {{- end }}
           args:
             - bootstrap
             - --crds=/crds
             - --admission-policies=/admission-policies
             - --helm-release={{ .Release.Name }}
             - --helm-release-namespace={{ .Release.Namespace }}
+
+      {{- if .Values.substrate.authentication.inClusterJWKS }}
+      containers:
+        - name: configure-authentication
+          image: {{ include "orb-provider.image" (list $ .Values.images.provider) }}
+          command:
+            - node
+            - -e
+            - {{ .Files.Get "files/configure-authentication.js" | toJson }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      {{- end }}
+{{- end }}

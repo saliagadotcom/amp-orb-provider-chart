@@ -1,0 +1,34 @@
+# Example only. Create the referenced Secrets before installation.
+cloud: onprem
+
+substrate:
+  authentication:
+    inClusterJWKS: true
+
+postgres:
+  enabled: false
+  external:
+    existingSecret: orb-database # Helm release namespace
+    caSecret: orb-database-ca # ate-system namespace
+    caKey: ca.crt
+
+snapshots:
+  location: gs://orb-snapshots/snapshots/
+  s3:
+    endpoint: https://s3.example.com
+    region: us-east-1
+    forcePathStyle: true
+    existingSecret: orb-storage # ate-system namespace
+
+workers:
+  sandbox:
+    cpu: 2
+    memoryGi: 4
+  min: 0
+  warm: 0
+
+atelet:
+  imageCache:
+    maxBytes: 21474836480 # 20 GiB unused-image eviction target, not a disk quota
+    highPercent: 75
+    lowPercent: 65

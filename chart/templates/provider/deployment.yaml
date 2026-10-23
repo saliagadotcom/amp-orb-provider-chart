@@ -143,7 +143,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: SUBSTRATE_API_ADDRESS
-              value: api.ate-system.svc:443
+              value: {{ if .Values.substrate.enabled }}api.ate-system.svc:443{{ else }}{{ .Values.substrate.external.apiAddress | quote }}{{ end }}
             - name: SUBSTRATE_API_CA_FILE
               value: /var/run/substrate/trust-bundle.pem
             - name: SUBSTRATE_API_TOKEN_FILE
@@ -151,7 +151,7 @@ spec:
             # The router admits the provider by its pod identity certificate (static mTLS;
             # templates/substrate/networkpolicy.yaml); orbd behind it checks nothing else.
             - name: SUBSTRATE_ROUTER_ADDRESS
-              value: atenet-router.ate-system.svc:443
+              value: {{ if .Values.substrate.enabled }}atenet-router.ate-system.svc:443{{ else }}{{ .Values.substrate.external.routerAddress | quote }}{{ end }}
             - name: SUBSTRATE_ROUTER_CA_FILE
               value: /var/run/substrate/trust-bundle.pem
             - name: SUBSTRATE_ROUTER_CREDENTIAL_FILE
@@ -244,5 +244,5 @@ spec:
                   expirationSeconds: 3600
         - name: podcert-trust
           configMap:
-            name: podcert-trust-bundles
+            name: {{ include "orb-provider.trustBundleConfigMap" . | quote }}
         {{- end }}

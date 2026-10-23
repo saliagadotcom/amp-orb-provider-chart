@@ -1,0 +1,134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "cloud": {
+      "type": "string",
+      "enum": [
+        "gke",
+        "eks",
+        "aks",
+        "onprem"
+      ]
+    },
+    "substrate": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "external": {
+          "type": "object",
+          "properties": {
+            "apiAddress": {
+              "type": "string",
+              "minLength": 1
+            },
+            "routerAddress": {
+              "type": "string",
+              "minLength": 1
+            },
+            "audience": {
+              "type": "string",
+              "minLength": 1
+            },
+            "trustBundleConfigMap": {
+              "type": "string",
+              "minLength": 1
+            },
+            "pkiDelivery": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "native"
+              ]
+            }
+          }
+        },
+        "authentication": {
+          "type": "object",
+          "properties": {
+            "inClusterJWKS": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "external": {
+          "type": "object",
+          "properties": {
+            "existingSecret": {
+              "type": "string"
+            },
+            "caSecret": {
+              "type": "string"
+            },
+            "caKey": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "snapshots": {
+      "type": "object",
+      "properties": {
+        "s3": {
+          "type": "object",
+          "properties": {
+            "endpoint": {
+              "type": "string",
+              "pattern": "^$|^https?://[^\\s]+$"
+            },
+            "region": {
+              "type": "string"
+            },
+            "existingSecret": {
+              "type": "string"
+            },
+            "forcePathStyle": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "atelet": {
+      "type": "object",
+      "properties": {
+        "imageCache": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxBytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "highPercent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "lowPercent": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 99
+            },
+            "gcPeriod": {
+              "type": "string",
+              "pattern": "^(0|([0-9]+(\\.[0-9]+)?(ns|us|\u00b5s|ms|s|m|h))+)$"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,3 +1,14 @@
+{{- if or (eq .Values.cloud "onprem") (not .Values.substrate.enabled) }}
+Amp orb provider: {{ .Release.Namespace }} ({{ .Values.cloud }}).
+
+Check readiness:
+  kubectl -n {{ .Release.Namespace }} get deployment/amp-orb-provider workerpool/amp-orbs
+
+Provider connection:
+  kubectl -n {{ .Release.Namespace }} logs deploy/amp-orb-provider -c spawner
+
+Select this provider in Amp. Test one disposable Orb before wider use.
+{{- else }}
 Amp orb provider installed in namespace {{ .Release.Namespace }} ({{ .Values.cloud }}).
 
 Connection:     amp orb provider claims jobs from {{ .Values.amp.url }} (outbound only)
@@ -11,3 +22,4 @@ from the first claim. Watch it claim:
 Check the deployment:
 
   kubectl -n {{ .Release.Namespace }} get deploy,workerpool,actortemplate
+{{- end }}

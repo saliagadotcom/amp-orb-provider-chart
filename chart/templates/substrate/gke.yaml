@@ -1,4 +1,4 @@
-{{- if eq .Values.cloud "gke" }}
+{{- if and .Values.substrate.enabled (eq .Values.cloud "gke") }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -1903,6 +1903,7 @@ metadata:
   name: atenet-router-envoy-config
   namespace: ate-system
 ---
+{{- if .Values.postgres.enabled }}
 apiVersion: v1
 data:
   pg_hba.conf: |
@@ -1962,7 +1963,9 @@ kind: ConfigMap
 metadata:
   name: postgres-config
   namespace: ate-system
+{{- end }}
 ---
+{{- if .Values.postgres.enabled }}
 apiVersion: v1
 data:
   setup.sql: |
@@ -2052,6 +2055,7 @@ kind: ConfigMap
 metadata:
   name: postgres-setup-h7k5m47g66
   namespace: ate-system
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -2143,6 +2147,7 @@ spec:
   selector:
     app: ate-idp-server
 ---
+{{- if .Values.postgres.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -2156,6 +2161,7 @@ spec:
     targetPort: 5432
   selector:
     app: postgres
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -2277,9 +2283,11 @@ spec:
           name: servicedns
         - mountPath: /run/podidentity.podcert.ate.dev
           name: podidentity
+{{- if .Values.postgres.enabled }}
         - mountPath: /run/postgres.podcert.ate.dev
           name: postgres
           readOnly: true
+{{- end }}
         - mountPath: /run/actor-id-jwt-pool
           name: actor-id-jwt-pool
         - mountPath: /run/actor-id-ca-pool
@@ -2299,11 +2307,19 @@ spec:
         - control
         - --socket=/run/objectstore-plugin/control.sock
         env:
+{{- if .Values.snapshots.s3.endpoint }}
+{{ include "orb-provider.s3Env" . | indent 8 }}
+{{- else }}
         - name: ATE_STORAGE_BACKEND
           value: gcs
+{{- end }}
         envFrom:
         - configMapRef:
             name: ate-otel-config
+{{- if .Values.snapshots.s3.endpoint }}
+        - secretRef:
+            name: {{ .Values.snapshots.s3.existingSecret | quote }}
+{{- end }}
         image: {{ include "orb-provider.image" (list $ .Values.images.substrate.objectstorePlugin) }}
         name: objectstore-plugin
         restartPolicy: Always
@@ -2353,6 +2369,7 @@ spec:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
               signerName: podidentity.podcert.ate.dev/identity
+{{- if .Values.postgres.enabled }}
       - name: postgres
         projected:
           sources:
@@ -2368,6 +2385,7 @@ spec:
               signerName: postgres.podcert.ate.dev/identity
               userAnnotations:
                 postgres.podcert.ate.dev/username: substrate_readwrite_user
+{{- end }}
       - name: actor-id-jwt-pool
         projected:
           sources:
@@ -2392,8 +2410,15 @@ spec:
         name: authentication-config
       - name: postgres-server-ca
         secret:
+{{- if .Values.postgres.enabled }}
           optional: true
           secretName: postgres-server-ca
+{{- else }}
+          secretName: {{ required "postgres.external.caSecret is required when postgres.enabled=false" .Values.postgres.external.caSecret | quote }}
+          items:
+          - key: {{ .Values.postgres.external.caKey | default "ca.crt" | quote }}
+            path: server-ca.pem
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -3010,6 +3035,7 @@ spec:
                 path: postgres-pool.json
               name: postgres-ca-pool
 ---
+{{- if .Values.postgres.enabled }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -3171,6 +3197,7 @@ spec:
       resources:
         requests:
           storage: 500Gi
+{{- end }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -3268,6 +3295,7 @@ spec:
         - --drain-timeout=5m
         - --objectstore-plugin-socket=/run/objectstore-plugin/node.sock
         - --snapshot-upload-delay=5s
+{{ include "orb-provider.imageCacheArgs" . | indent 8 }}
         env:
         - name: NODE_NAME
           valueFrom:
@@ -3363,11 +3391,19 @@ spec:
         - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging
         - --asset-staging-capacity=8Gi
         env:
+{{- if .Values.snapshots.s3.endpoint }}
+{{ include "orb-provider.s3Env" . | indent 8 }}
+{{- else }}
         - name: ATE_STORAGE_BACKEND
           value: gcs
+{{- end }}
         envFrom:
         - configMapRef:
             name: ate-otel-config
+{{- if .Values.snapshots.s3.endpoint }}
+        - secretRef:
+            name: {{ .Values.snapshots.s3.existingSecret | quote }}
+{{- end }}
         image: {{ include "orb-provider.image" (list $ .Values.images.substrate.objectstorePlugin) }}
         name: objectstore-plugin
         resources:
@@ -3621,6 +3657,7 @@ spec:
   policyTypes:
   - Ingress
 ---
+{{- if .Values.postgres.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -3640,4 +3677,5 @@ spec:
       app: postgres
   policyTypes:
   - Ingress
+{{- end }}
 {{- end }}

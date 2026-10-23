@@ -1,0 +1,10 @@
+# Merge with existing Talos/Omni patches. Preserve existing labels, especially CSI topology.
+apiVersion: v1alpha1
+kind: KubeNodeConfig
+labels:
+  ate.dev/sandboxClass: gvisor
+---
+apiVersion: v1alpha1
+kind: SysctlConfig
+params:
+  user.max_user_namespaces: "11255"

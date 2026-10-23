@@ -1,0 +1,18 @@
+# Existing compatible Substrate in this cluster. No runtime installation or upgrade hooks.
+cloud: onprem
+substrate:
+  enabled: false
+  external:
+    apiAddress: api.ate-system.svc:443
+    routerAddress: atenet-router.ate-system.svc:443
+    audience: api.ate-system.svc
+    pkiDelivery: agent
+    trustBundleConfigMap: podcert-trust-bundles
+snapshots:
+  location: gs://orb-snapshots/snapshots/
+workers:
+  sandbox:
+    cpu: 2
+    memoryGi: 4
+  min: 0
+  warm: 0
