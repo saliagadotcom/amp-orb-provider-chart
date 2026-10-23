@@ -1,0 +1,113 @@
+# gke, eks or aks.
+cloud: gke
+
+# How the provider reaches Amp. Nothing connects in: `amp orb provider`, in the provider Pod,
+# claims sandbox jobs from Amp over outbound HTTPS and runs them against the provider next to
+# it. The provider token (Amp's workspace settings, Orb providers) is not a value: before
+# installing, create the Secret `amp-orb-spawner` in the release namespace with the key
+# `AMP_ORB_PROVIDER_TOKEN`. Helm never sees it. Orbs also need outbound HTTPS/WSS to Amp plus
+# Git, package, and image access; see orb-provider/substrate/doc/self-hosted.md.
+amp:
+  url: https://ampcode.com
+
+# The `amp orb provider` container of the provider Pod. Stateless; every Pod claims from the same
+# queue.
+spawner:
+  npm:
+    # Optional npm registry for the CLI installed at startup. Empty uses npm's default.
+    registry: ''
+    # Existing Secret in this release's namespace with a .npmrc key. Mounted read-only as
+    # npm's user config; keep registry credentials here, not in Helm values.
+    existingConfigSecret: ''
+  dispatch:
+    # Optional existing ConfigMap in this release's namespace with a `dispatch` key holding an
+    # executable script. The controller runs it for every job instead of the image's
+    # /usr/local/bin/amp-orb-dispatch, which stays in the image so a wrapper can `exec` it after
+    # its own logging or auditing. Its stdout and stderr go to the spawner container's log.
+    existingConfigMap: ''
+  resources:
+    requests:
+      cpu: 50m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+provider:
+  # Pods, each a spawner and a provider container. Any number; they share Amp's job queue.
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+# Where paused sandboxes are stored. Substrate uses gs://<bucket>/<prefix> for every backend.
+# GKE: a GCS bucket. EKS: an S3 bucket in the cluster's region. AKS: a container in
+# snapshots.aks.storageAccount (gs://<container>/<prefix>).
+snapshots:
+  location: ''
+  # EKS only. Required.
+  eks:
+    # Region of the cluster and the bucket.
+    region: ''
+    # IAM role (IRSA) Substrate assumes to read, write and delete in the bucket. Its trust policy
+    # must allow both ate-system/atelet and ate-system/ate-api-server.
+    ateletRoleArn: ''
+  # AKS only. Required.
+  aks:
+    # Storage account that holds the container.
+    storageAccount: ''
+    # Client ID of the user-assigned managed identity (workload identity) Substrate uses to read,
+    # write and delete in the container. It needs federated credentials for both
+    # ate-system/atelet and ate-system/ate-api-server.
+    clientId: ''
+
+# Substrate workers. One worker hosts one running sandbox of `sandbox` size. The worker pod requests
+# 1 CPU and `memoryGi` + 1Gi, with `cpu` as its CPU limit, so memory decides how many workers fit a
+# node. Every Amp size gets `sandbox`; the default is Amp's largest (a1.xxlarge). The provider
+# keeps the WorkerPool at max(min, busy + waiting + warm) workers, `warm` being the idle workers
+# kept ready for the next sandbox. The node pool is the ceiling.
+workers:
+  sandbox:
+    cpu: 16
+    memoryGi: 32
+  min: 1
+  warm: 2
+
+# An upgrade that changes the orb runtime first pauses every running orb (up to ten minutes),
+# which resumes on its thread's next use; otherwise the upgrade loses them. Set false to skip.
+upgrade:
+  pauseSandboxes: true
+
+# Substrate's atelet pulls the sandbox image, the orbd image volume and the pause image itself, not
+# through kubelet, so the cluster's imagePullSecrets do not apply to them.
+atelet:
+  registry:
+    # Name of a kubernetes.io/dockerconfigjson Secret in the ate-system namespace that atelet uses
+    # as its Docker config for those pulls, for images in a private registry (Artifactory, a
+    # mirror). Optional: without the Secret every registry is pulled anonymously. Not needed for
+    # images in GAR on GKE or ECR on EKS, which use the cluster identity.
+    dockerConfigSecret: atelet-registry-credentials
+
+# Digest-pinned images of one release. deploy/release/release.sh replaces this block with the
+# release's images; keep it last.
+images:
+  registry: us-central1-docker.pkg.dev/amp-prod-0/orb-provider
+  spawner: spawner@sha256:1ff0e046f94d0415536d0ba0a9d4056502d0db18a734b555fe09ce3355dea7d3
+  provider: provider@sha256:9de5519a10380be45e02ee43f58373c81fdb7d64f81f9c795e8f04ae451a19bc
+  orbd: orbd@sha256:d4b29d7242fc6a5a36e3932349968f60af2f1e2bb315304af0d7e49e8ba51493
+  sandbox: us-central1-docker.pkg.dev/amp-prod-0/amp-orb/amp-orb@sha256:da3bb5171d686c75f4aa91960b69d39b2e541a75e92e83d1142f5077efdc1a85
+  substrate:
+    ateapi: substrate/ateapi@sha256:5dbcae59cab9032a988a7b33c7e17ae6d87fa5fe4fd20dcc141c44853b424a7e
+    atecontroller: substrate/atecontroller@sha256:09c99f1a0156f076aba605c0c5f2cb80e9b918e5fad0cb97589236143d536686
+    atelet: substrate/atelet@sha256:0a33c7094a4150b2cdb3981f7c648cc8be372b8f67c19d1b106f5cbc44d73e32
+    atenet: substrate/atenet@sha256:d8f8fff12d7fba10e6b46861d2e83eba0b070f10937d0fa50d471391fcbd1615
+    ateIdpServer: substrate/ate-idp-server@sha256:3701d7b6726cab8c7c934fe45a124261858da484ffc79546c2b6d9a653beb32a
+    podcertcontroller: substrate/podcertcontroller@sha256:154f05f23d90cd7087e5d1228ab05a0575a8c582c26582ff470c9f3649a8681e
+    podcertAgent: substrate/podcert-agent@sha256:98c5a9ab22cb23faa8167fe11482f84cf5194bfe22d28ffdf245a3c9a76b5611
+    objectstorePlugin: substrate/objectstore-plugin@sha256:cee4f3cea1dea4322c9472fbc7b55bc36c9ba608baca4199c13c3c992de2347d
+    ateworkerGvisor: substrate/ateworker-gvisor@sha256:808a07d772357d2c7fa57ea75a57131b8c0f65c4b32098a23cde4f15e6a4677f
+    ateSetup: substrate/ate-setup@sha256:77114ed7f8392f7a66d45b87e6d04dc7d49b0ee972c187c394781ad27a7f9300
+    kubectlAte: substrate/kubectl-ate@sha256:3b3730046e5de999c69aacd51bf16ea9347bba4b0697355552ee27577f30a5f0
+    envoyDataplane: substrate/envoy-dataplane@sha256:0d4ee6b761598176b7b629d6a39d1ccfa429e5083b98b801ce88d80a931dd9ca

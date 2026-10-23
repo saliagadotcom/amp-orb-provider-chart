@@ -1,0 +1,121 @@
+# Before anything else is applied, `ate-setup bootstrap` creates what the Substrate manifests
+# cannot carry: the Substrate namespaces (ate-system, otel-system, podcertificate-controller-system;
+# the release kustomizations strip them from the manifests because Helm would try to create them
+# a second time), the generated signing key pools (kept on upgrade), and ate-api-server's config.
+# It also applies the chart's CRDs (crds/, mounted from the ConfigMap below): Helm installs them
+# on the first install and never upgrades them, so this is what carries a schema change to an
+# existing cluster without a manual kubectl apply. The SandboxConfig admission policy
+# (admission-policies/) follows: Helm patches the SandboxConfig before the policy, so without this
+# the previous release's policy would check the new SandboxConfig.
+# Uninstalling the release leaves the namespaces behind; the runbooks delete them by hand.
+{{- $hook := dict "helm.sh/hook" "pre-install,pre-upgrade" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: substrate-bootstrap
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook-weight" "-1") $hook) | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: substrate-bootstrap
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook-weight" "-1") $hook) | nindent 4 }}
+rules:
+  - apiGroups: ['']
+    resources: ['namespaces', 'configmaps']
+    verbs: ['get', 'create', 'patch']
+  # update: on upgrade, bootstrap adds the public "jwks" key to an existing actor-id-jwt-pool
+  # Secret with a plain Update (ate-setup, steps/create.go publishJWTPoolKeys).
+  - apiGroups: ['']
+    resources: ['secrets']
+    verbs: ['get', 'create', 'patch', 'update']
+  - apiGroups: ['apiextensions.k8s.io']
+    resources: ['customresourcedefinitions']
+    verbs: ['get', 'create', 'patch']
+  - apiGroups: ['admissionregistration.k8s.io']
+    resources: ['validatingadmissionpolicies', 'validatingadmissionpolicybindings']
+    verbs: ['get', 'create', 'patch']
+  # On upgrade, bootstrap stamps ate-api-server's pod template with a digest of its environment
+  # so a changed database setting rolls it (ate-setup, steps/apienv.go annotateAPIServerEnvHash).
+  - apiGroups: ['apps']
+    resources: ['deployments']
+    verbs: ['get', 'patch']
+  - nonResourceURLs: ['/.well-known/openid-configuration']
+    verbs: ['get']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: substrate-bootstrap
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook-weight" "-1") $hook) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: substrate-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: substrate-bootstrap
+    namespace: {{ .Release.Namespace }}
+---
+# The chart's crds/ directory, so the hook can apply the current CRD schema on upgrade.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: substrate-crds
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook-weight" "-1") $hook) | nindent 4 }}
+data:
+  {{- (.Files.Glob "crds/*.yaml").AsConfig | nindent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: substrate-admission-policies
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook-weight" "-1") $hook) | nindent 4 }}
+data:
+  {{- (.Files.Glob "admission-policies/*.yaml").AsConfig | nindent 2 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: substrate-bootstrap
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook-weight" "0") $hook) | nindent 4 }}
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      serviceAccountName: substrate-bootstrap
+      restartPolicy: Never
+      volumes:
+        - name: crds
+          configMap:
+            name: substrate-crds
+        - name: admission-policies
+          configMap:
+            name: substrate-admission-policies
+      containers:
+        - name: bootstrap
+          image: {{ include "orb-provider.image" (list $ .Values.images.substrate.ateSetup) }}
+          volumeMounts:
+            - name: crds
+              mountPath: /crds
+              readOnly: true
+            - name: admission-policies
+              mountPath: /admission-policies
+              readOnly: true
+          args:
+            - bootstrap
+            - --crds=/crds
+            - --admission-policies=/admission-policies
+            - --helm-release={{ .Release.Name }}
+            - --helm-release-namespace={{ .Release.Namespace }}

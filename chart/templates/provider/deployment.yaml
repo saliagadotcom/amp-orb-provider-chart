@@ -1,0 +1,248 @@
+# One Pod, two containers (orb-provider/substrate/doc/architecture.md, cli/src/orb-spawner/AGENTS.md):
+#
+#   spawner   `amp orb provider`, Amp's controller. Claims sandbox lifecycle jobs from Amp over
+#             outbound HTTPS and runs the dispatch script (orb-provider/http-backend/dispatch.mjs,
+#             baked into the image, or the user's own from `spawner.dispatch.existingConfigMap`)
+#             once per job, which POSTs it to the provider on the Pod's loopback. Keeps no state.
+#   provider  Substrate's backend. Answers `POST /jobs` on 127.0.0.1:8080 and drives Substrate.
+#
+# Nothing connects in from outside the Pod, so the provider binds loopback and the probes run
+# inside its container. `provider.replicas` Pods all claim from the same queue.
+{{- include "orb-provider.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amp-orb-provider
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: amp-orb-provider
+spec:
+  replicas: {{ .Values.provider.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: amp-orb-provider
+  template:
+    metadata:
+      labels:
+        app: amp-orb-provider
+    spec:
+      serviceAccountName: amp-orb-provider
+      securityContext:
+        fsGroup: 1000
+      # On SIGTERM the spawner stops claiming and finishes the jobs it holds; the provider
+      # finishes the operations in flight, then exits (src/main.ts). The grace period must
+      # outlast the longest operation: 20 min of lifecycle steps, the last of which may run
+      # 10 min more, then 5 min waiting for the guest (OPERATION_TIMEOUT_MS, RESUME_TIMEOUT_MS,
+      # READY_TIMEOUT_MS). A Pod with nothing in flight exits at once. A job the spawner cannot
+      # finish goes back to Amp's queue when its claim expires. GKE Standard honours this for up
+      # to 1 h on node upgrades and 10 min on autoscaler scale-down; Autopilot would cap it at
+      # 10 min.
+      terminationGracePeriodSeconds: 2400
+      {{- if eq (include "orb-provider.pkiDelivery" .) "agent" }}
+      # Without the PodCertificate API, podcert-agent fetches and renews the pod identity
+      # certificate; its startupProbe holds the provider until the first bundle is written.
+      initContainers:
+        - name: podcert-agent
+          restartPolicy: Always
+          image: {{ include "orb-provider.image" (list $ .Values.images.substrate.podcertAgent) }}
+          args:
+            - --cert=podidentity.podcert.ate.dev/identity=/out/podidentity
+          startupProbe:
+            exec:
+              command:
+                - /ko-app/podcert-agent
+                - --check
+                - --cert=podidentity.podcert.ate.dev/identity=/out/podidentity
+            periodSeconds: 1
+            failureThreshold: 300
+          volumeMounts:
+            - name: podcert-token
+              mountPath: /var/run/secrets/podcert.ate.dev
+              readOnly: true
+            - name: podcert-trust
+              mountPath: /run/podcert-trust
+              readOnly: true
+            - name: podidentity
+              mountPath: /out/podidentity
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+      {{- end }}
+      containers:
+        - name: spawner
+          image: {{ include "orb-provider.image" (list $ .Values.images.spawner) }}
+          args:
+            - orb
+            - provider
+            {{- if .Values.spawner.dispatch.existingConfigMap }}
+            - /etc/amp-orb/dispatch
+            {{- else }}
+            - /usr/local/bin/amp-orb-dispatch
+            {{- end }}
+          env:
+            - name: AMP_URL
+              value: {{ .Values.amp.url | quote }}
+            # The provider token lives in a Secret the chart does not manage (values.yaml, amp).
+            # Restart the Deployment after rotating it.
+            - name: AMP_ORB_PROVIDER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: amp-orb-spawner
+                  key: AMP_ORB_PROVIDER_TOKEN
+            {{- if .Values.spawner.npm.registry }}
+            - name: NPM_CONFIG_REGISTRY
+              value: {{ .Values.spawner.npm.registry | quote }}
+            {{- end }}
+            {{- if .Values.spawner.npm.existingConfigSecret }}
+            - name: NPM_CONFIG_USERCONFIG
+              value: /var/run/amp-npm/.npmrc
+            {{- end }}
+          {{- if or .Values.spawner.npm.existingConfigSecret .Values.spawner.dispatch.existingConfigMap }}
+          volumeMounts:
+            {{- if .Values.spawner.npm.existingConfigSecret }}
+            - name: spawner-npm
+              mountPath: /var/run/amp-npm
+              readOnly: true
+            {{- end }}
+            {{- if .Values.spawner.dispatch.existingConfigMap }}
+            - name: spawner-dispatch
+              mountPath: /etc/amp-orb
+              readOnly: true
+            {{- end }}
+          {{- end }}
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+          resources:
+            {{- toYaml .Values.spawner.resources | nindent 12 }}
+        - name: provider
+          image: {{ include "orb-provider.image" (list $ .Values.images.provider) }}
+          env:
+            # Loopback only: the spawner in this Pod is the one client, and `/jobs` has no auth.
+            - name: HOST
+              value: 127.0.0.1
+            - name: PORT
+              value: '8080'
+            # The one namespace everything is installed into, read from the Pod itself.
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SUBSTRATE_API_ADDRESS
+              value: api.ate-system.svc:443
+            - name: SUBSTRATE_API_CA_FILE
+              value: /var/run/substrate/trust-bundle.pem
+            - name: SUBSTRATE_API_TOKEN_FILE
+              value: /var/run/substrate/token
+            # The router admits the provider by its pod identity certificate (static mTLS;
+            # templates/substrate/networkpolicy.yaml); orbd behind it checks nothing else.
+            - name: SUBSTRATE_ROUTER_ADDRESS
+              value: atenet-router.ate-system.svc:443
+            - name: SUBSTRATE_ROUTER_CA_FILE
+              value: /var/run/substrate/trust-bundle.pem
+            - name: SUBSTRATE_ROUTER_CREDENTIAL_FILE
+              value: /var/run/podidentity/credential-bundle.pem
+            - name: SUBSTRATE_ATESPACE
+              value: amp
+            # The sandbox every worker hosts. The provider builds the ActorTemplate from these
+            # (src/template.ts) and creates it in Substrate on startup; a changed value here is a
+            # new template, and rolls the Pods since it is a changed Pod spec.
+            - name: SANDBOX_IMAGE
+              value: {{ include "orb-provider.image" (list $ .Values.images.sandbox) }}
+            - name: ORBD_IMAGE
+              value: {{ include "orb-provider.image" (list $ .Values.images.orbd) }}
+            - name: SANDBOX_CPU
+              value: {{ .Values.workers.sandbox.cpu | quote }}
+            - name: SANDBOX_MEMORY_GI
+              value: {{ .Values.workers.sandbox.memoryGi | quote }}
+            - name: SNAPSHOT_LOCATION
+              value: {{ .Values.snapshots.location | quote }}
+            # The WorkerPool in workers.yaml and the bounds the scaler keeps it within.
+            - name: SUBSTRATE_WORKER_POOL
+              value: amp-orbs
+            - name: SUBSTRATE_WORKERS_MIN
+              value: {{ .Values.workers.min | quote }}
+            - name: SUBSTRATE_WORKERS_WARM
+              value: {{ .Values.workers.warm | quote }}
+          volumeMounts:
+            - name: substrate
+              mountPath: /var/run/substrate
+              readOnly: true
+            - name: podidentity
+              mountPath: /var/run/podidentity
+              readOnly: true
+          # The provider listens on loopback, so an httpGet probe from the kubelet cannot reach
+          # it; the image is Node, which fetches from inside the container instead. /healthz is
+          # the process; /readyz is 503 until Substrate is reachable, and /jobs holds jobs until then.
+          readinessProbe:
+            exec:
+              command: {{ include "orb-provider.probe" "/readyz" }}
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: {{ include "orb-provider.probe" "/healthz" }}
+            periodSeconds: 15
+            failureThreshold: 4
+          resources:
+            {{- toYaml .Values.provider.resources | nindent 12 }}
+      volumes:
+        {{- if .Values.spawner.npm.existingConfigSecret }}
+        - name: spawner-npm
+          secret:
+            secretName: {{ .Values.spawner.npm.existingConfigSecret | quote }}
+            defaultMode: 288 # 0440: readable by root and the spawner's fsGroup.
+            items:
+              - key: .npmrc
+                path: .npmrc
+        {{- end }}
+        {{- if .Values.spawner.dispatch.existingConfigMap }}
+        - name: spawner-dispatch
+          configMap:
+            name: {{ .Values.spawner.dispatch.existingConfigMap | quote }}
+            defaultMode: 493 # 0755: the controller execs the script directly.
+            items:
+              - key: dispatch
+                path: dispatch
+        {{- end }}
+        - name: substrate
+          {{- include "orb-provider.substrateVolume" . | nindent 10 }}
+        # The pod identity certificate: projected by the kubelet on GKE, written by the
+        # podcert-agent sidecar elsewhere.
+        - name: podidentity
+          {{- if eq (include "orb-provider.pkiDelivery" .) "agent" }}
+          emptyDir:
+            medium: Memory
+          {{- else }}
+          projected:
+            sources:
+              - podCertificate:
+                  signerName: podidentity.podcert.ate.dev/identity
+                  keyType: ECDSAP256
+                  credentialBundlePath: credential-bundle.pem
+          {{- end }}
+        {{- if eq (include "orb-provider.pkiDelivery" .) "agent" }}
+        - name: podcert-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: podcert.ate.dev
+                  expirationSeconds: 3600
+        - name: podcert-trust
+          configMap:
+            name: podcert-trust-bundles
+        {{- end }}

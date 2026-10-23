@@ -1,0 +1,49 @@
+# The sandbox every worker hosts is an ActorTemplate the provider builds (src/template.ts) from
+# the SANDBOX_* and ORBD_IMAGE environment in deployment.yaml and creates through Substrate's API
+# on startup (Substrate has no ActorTemplate CRD). Its workerSelector is this pool's `workload`
+# label.
+# One worker hosts one running sandbox. The provider's scaler owns `replicas` (never below
+# `workers.min`), so the chart leaves it out.
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: amp-orbs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    workload: amp-orbs
+spec:
+  sandboxClasses:
+    - name: gvisor
+  workerImage: {{ include "orb-provider.image" (list $ .Values.images.substrate.ateworkerGvisor) }}
+  template:
+    nodeSelector:
+      ate.dev/sandboxClass: gvisor
+    tolerations:
+      - key: ate.dev/sandboxClass
+        operator: Equal
+        value: gvisor
+        effect: NoSchedule
+    annotations:
+      cluster-autoscaler.kubernetes.io/safe-to-evict: 'true'
+    resources:
+      requests:
+        cpu: '1'
+        memory: {{ add .Values.workers.sandbox.memoryGi 1 }}Gi
+      limits:
+        cpu: {{ .Values.workers.sandbox.cpu | quote }}
+        memory: {{ add .Values.workers.sandbox.memoryGi 1 }}Gi
+---
+# Busy workers (hosting one of our sandboxes, labelled by the scaler) may not be evicted. On a node
+# being drained the scaler suspends their sandboxes first; the label drops and the eviction goes
+# through. A worker evicted anyway suspends its sandbox while the Pod terminates.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: amp-orbs-busy-workers
+  namespace: {{ .Release.Namespace }}
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      ate.dev/worker-pool: amp-orbs
+      amp.dev/worker-busy: 'true'

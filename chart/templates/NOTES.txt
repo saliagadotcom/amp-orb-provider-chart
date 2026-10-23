@@ -1,0 +1,13 @@
+Amp orb provider installed in namespace {{ .Release.Namespace }} ({{ .Values.cloud }}).
+
+Connection:     amp orb provider claims jobs from {{ .Values.amp.url }} (outbound only)
+
+The spawner container dials Amp with the token in the amp-orb-spawner Secret and runs each job
+against the provider container in the same Pod. Nothing to register in Amp: it lists the provider as online
+from the first claim. Watch it claim:
+
+  kubectl -n {{ .Release.Namespace }} logs deploy/amp-orb-provider -c spawner
+
+Check the deployment:
+
+  kubectl -n {{ .Release.Namespace }} get deploy,workerpool,actortemplate

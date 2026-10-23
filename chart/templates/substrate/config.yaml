@@ -1,0 +1,20 @@
+{{/* Region of the S3 snapshot bucket; atelet reads it as AWS_REGION. */}}
+{{- if eq .Values.cloud "eks" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ate-aws-config
+  namespace: ate-system
+data:
+  region: {{ .Values.snapshots.eks.region }}
+{{- end }}
+{{/* Storage account of the Azure Blob snapshot container; atelet reads it as AZURE_STORAGE_ACCOUNT. */}}
+{{- if eq .Values.cloud "aks" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ate-azure-config
+  namespace: ate-system
+data:
+  storageAccount: {{ .Values.snapshots.aks.storageAccount }}
+{{- end }}

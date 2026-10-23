@@ -1,0 +1,65 @@
+# The provider's two ways into ate-system, which Substrate's own NetworkPolicies
+# (ate-system-networkpolicies.yaml: default-deny ingress, then one allow per component) close
+# to pods outside it:
+#
+# - Only the provider may talk to Substrate's router. The router forwards any request to the
+#   sandbox named in its ate-target-actor header, where orbd runs it without a check of its own,
+#   so whoever the router admits can run commands in every sandbox. What admits a client is its
+#   certificate: the release kustomization runs the router in static mTLS mode (Substrate's
+#   router-static-mtls component), with the plaintext ports closed and the provider's SPIFFE ID,
+#   spiffe://cluster.local/ns/<release namespace>/sa/amp-orb-provider, as the one ID on its
+#   allowlist; a sandbox has no pod identity certificate at all. This policy is the second
+#   line, so that nothing else even reaches the TLS listener. Substrate admits every source to
+#   the router's data ports and leaves narrowing them to the deployer (docs/threat-model.md
+#   T-04, T-17); the release kustomization drops that policy so this one is the only one
+#   selecting the router. Probe and metrics ports stay open through Substrate's
+#   ate-system-observability policy.
+# - The provider calls the Substrate API (api.ate-system.svc:443). Substrate admits API clients
+#   from namespaces labelled ate.dev/api-access=true; the chart cannot label the namespace it is
+#   installed into, so it admits the provider by pod instead.
+#
+# Enforcement is a cluster setting the chart does not touch: GKE Dataplane V2 always enforces
+# NetworkPolicy, EKS only with the VPC CNI's network policy controller on (doc/eks.md), AKS only
+# with a network policy engine (doc/aks.md).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: amp-orb-provider-only
+  namespace: ate-system
+spec:
+  podSelector:
+    matchLabels:
+      app: atenet-router
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              app: amp-orb-provider
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: amp-orb-provider-api-access
+  namespace: ate-system
+spec:
+  podSelector:
+    matchLabels:
+      app: ate-api-server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              app: amp-orb-provider
+      ports:
+        - protocol: TCP
+          port: 443

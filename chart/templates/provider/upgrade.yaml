@@ -1,0 +1,108 @@
+# Pre-upgrade hook: before a release that changes Substrate rolls atelet and the API server,
+# suspend every sandbox on a worker (src/upgrade.ts, protocol.md "Chart Upgrades"). Otherwise
+# those sandboxes end CRASHED. Best effort: the Job always succeeds. Runs only when
+# orb-provider.substrateRevision differs from the one the previous release recorded below.
+{{- $previous := lookup "v1" "ConfigMap" .Release.Namespace "amp-orb-provider-release" }}
+{{- $revision := include "orb-provider.substrateRevision" . }}
+{{- $changed := or (not $previous) (ne (get ($previous.data | default dict) "substrateRevision") $revision) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: amp-orb-provider-release
+  namespace: {{ .Release.Namespace }}
+data:
+  substrateRevision: {{ $revision | quote }}
+{{- if and .Values.upgrade.pauseSandboxes $changed }}
+---
+{{- $hook := dict "helm.sh/hook" "pre-upgrade" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" }}
+# A hook, not a regular manifest, so it is in place before the Job: Helm applies the release's
+# manifests only after the pre-upgrade hooks. Kept after the Job (no hook-succeeded).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: amp-orb-provider-upgrade-api-access
+  namespace: ate-system
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-3"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  podSelector:
+    matchLabels:
+      app: ate-api-server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              app: amp-orb-provider-upgrade
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: amp-orb-provider-upgrade
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook-weight" "-2") $hook) | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: amp-orb-provider-upgrade
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml (merge (dict "helm.sh/hook-weight" "-1") $hook) | nindent 4 }}
+spec:
+  backoffLimit: 1
+  # Listing (30 s) plus one round of checkpoints (SUSPEND_TIMEOUT_MS, 10 min) with room to spare.
+  activeDeadlineSeconds: 1500
+  template:
+    metadata:
+      labels:
+        # Admitted to the Substrate API by templates/substrate/networkpolicy.yaml.
+        app: amp-orb-provider-upgrade
+    spec:
+      serviceAccountName: amp-orb-provider-upgrade
+      restartPolicy: Never
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: upgrade
+          image: {{ include "orb-provider.image" (list $ .Values.images.provider) }}
+          args:
+            - /opt/amp-orb-provider/upgrade-main.js
+          env:
+            - name: SUBSTRATE_API_ADDRESS
+              value: api.ate-system.svc:443
+            - name: SUBSTRATE_API_CA_FILE
+              value: /var/run/substrate/trust-bundle.pem
+            - name: SUBSTRATE_API_TOKEN_FILE
+              value: /var/run/substrate/token
+            - name: SUBSTRATE_ATESPACE
+              value: amp
+          volumeMounts:
+            - name: substrate
+              mountPath: /var/run/substrate
+              readOnly: true
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: substrate
+          {{- include "orb-provider.substrateVolume" . | nindent 10 }}
+{{- end }}
